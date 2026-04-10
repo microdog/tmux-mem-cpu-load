@@ -17,6 +17,8 @@ Description
 A simple, lightweight program provided for system monitoring in the *status*
 line of **tmux**.
 
+The network monitor displays real-time network traffic (download/upload rates).
+
 The memory monitor displays the used and available memory.
 
 The CPU usage monitor outputs a percent CPU usage over all processors. It also
@@ -26,19 +28,21 @@ The system load average is also displayed.
 
 Example output::
 
-  2885/7987MB [|||||     ]  51.2% 2.11 2.35 2.44
+  ↓3.2KB/s ↑1.5KB/s  2885/7987MB [|||||     ]  51.2% 2.11 2.35 2.44
 
-   ^    ^          ^         ^     ^    ^    ^
-   |    |          |         |     |    |    |
-   1    2          3         4     5    6    7
+       ^       ^        ^    ^          ^         ^     ^    ^    ^
+       |       |        |    |          |         |     |    |    |
+       1       2        3    4          5         6     7    8    9
 
-1. Currently used memory.
-2. Available memory.
-3. CPU usage bar graph.
-4. CPU usage percentage.
-5. Load average for the past minute.
-6. Load average for the past 5 minutes.
-7. Load average for the past 15 minutes.
+1. Download rate.
+2. Upload rate.
+3. Currently used memory.
+4. Available memory.
+5. CPU usage bar graph.
+6. CPU usage percentage.
+7. Load average for the past minute.
+8. Load average for the past 5 minutes.
+9. Load average for the past 15 minutes.
 
 For `terminals with 256 color support`_, graded colors can be displayed by
 passing the **--colors** flag.
@@ -50,7 +54,7 @@ Installation
 Dependencies
 ------------
 
-Currently, Linux, Mac OSX, FreeBSD, OpenBSD, and NetBSD are supported.
+Currently, Linux, macOS, FreeBSD, OpenBSD, NetBSD, and Windows are supported.
 
 Building
 ~~~~~~~~
@@ -121,6 +125,20 @@ If you installed using tpm, you must specify the full path to the
 
   set -g status-right "#[fg=green]#($TMUX_PLUGIN_MANAGER_PATH/tmux-mem-cpu-load/tmux-mem-cpu-load --colors --powerline-right --interval 2)#[default]"
 
+To customize network monitoring, you can use the network options::
+
+  # Show only download rate for the default aggregate of active non-loopback interfaces
+  set -g status-right "#[fg=green]#(tmux-mem-cpu-load --colors --network-mode 2 --interval 2)#[default]"
+
+  # Use dynamic mode and target several interfaces explicitly
+  set -g status-right "#[fg=green]#(tmux-mem-cpu-load --colors --network-mode 4 --network-interface en0,utun2 --network-interface bridge0 --interval 2)#[default]"
+
+The network interface selection is aggregate-by-default: when no selectors are
+provided, tmux-mem-cpu-load sums every active non-loopback interface into one
+combined segment. If no eligible interface exists, the network segment is
+hidden. If the collector itself fails, the network segment shows a short
+unavailable marker.
+
 Note that the *interval* argument to `tmux-mem-cpu-load` should be the same number
 of seconds that *status-interval* is set at.
 
@@ -129,6 +147,28 @@ defaults to 10.  This can, for instance, be set to the number of cores in a
 multi-core system.
 
 The *colors* option will add graded colors for each of the measures.
+
+Network Monitoring
+------------------
+
+The network monitoring feature displays real-time network traffic rates. It supports multiple display modes:
+
+* **Both** (default): Shows both download and upload rates (↓3.2KB/s ↑1.5KB/s)
+* **Download only**: Shows only download rate (↓3.2KB/s)
+* **Upload only**: Shows only upload rate (↑1.5KB/s)  
+* **Dynamic**: Shows whichever rate is higher to save space
+* **Off**: Disables network monitoring
+
+By default, tmux-mem-cpu-load aggregates every active non-loopback interface
+into one network segment. You can target one or many interfaces explicitly by
+repeating ``-N`` or by passing a comma-separated selector list. Selectors match
+either the interface name shown by the platform or a stable interface id when
+the platform exposes one.
+
+If no eligible interface matches, the network segment stays hidden. If the
+collector fails, the segment shows a short unavailable marker instead.
+
+The network section uses smart padding to minimize width changes while maintaining readability. When colors are enabled, the network traffic is color-coded from green (low traffic) to red (high traffic).
 
 The full usage::
 
@@ -163,6 +203,10 @@ The full usage::
         Set cpu % display mode. 0: Default max 100%, 1: Max 100% * number of threads.
   -a <value>, --averages-count <value>
         Set how many load-averages should be drawn. Default: 3
+  -n <value>, --network-mode <value>
+        Set network display mode. 0: Off, 1: Both (default), 2: Download only, 3: Upload only, 4: Dynamic.
+  -N <value>, --network-interface <value>
+        Set network selector(s) to monitor (interface name or stable id); repeat or comma-separate values. Default: aggregate active non-loopback interfaces
 
 Blending Dynamic Colors Tmux Powerline Segments
 ===============================================

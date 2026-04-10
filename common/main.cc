@@ -16,12 +16,14 @@
  */
 
 #include <cstring>
-#include <iostream>
+#include <cstdlib> // EXIT_SUCCESS, atoi()
 #include <fstream>
+#include <getopt.h> // getopt_long
+#include <future>
+#include <iostream>
 #include <sstream>
 #include <string>
-#include <cstdlib> // EXIT_SUCCESS, atoi()
-#include <getopt.h> // getopt_long
+#include <vector>
 
 #include "version.h"
 #include "graph.h"
@@ -32,6 +34,7 @@
 #include "cpu.h"
 #include "memory.h"
 #include "load.h"
+#include "network.h"
 
 #include "powerline.h"
 
@@ -149,6 +152,10 @@ void print_help()
     << "\tSet cpu % display mode. 0: Default max 100%, 1: Max 100% * number of threads. \n"
     << "-a <value>, --averages-count <value>\n"
     << "\tSet how many load-averages should be drawn. Default: 3\n"
+    << "-n <value>, --network-mode <value>\n"
+    << "\tSet network display mode. 0: Off, 1: Both (default), 2: Download only, 3: Upload only, 4: Dynamic.\n"
+    << "-N <value>, --network-interface <value>\n"
+    << "\tSet network selector(s) to monitor (interface name or stable id); repeat or comma-separate values. Default: aggregate active non-loopback interfaces\n"
     << endl;
 }
 
@@ -167,6 +174,8 @@ int main( int argc, char** argv )
   bool segments_to_right= false;
   MEMORY_MODE mem_mode = MEMORY_MODE_DEFAULT;
   CPU_MODE cpu_mode = CPU_MODE_DEFAULT;
+  NETWORK_MODE net_mode = NETWORK_MODE_DEFAULT;
+  std::vector< std::string > net_interfaces;
 
   static struct option long_options[] =
   {
@@ -186,12 +195,14 @@ int main( int argc, char** argv )
     { "averages-count", required_argument, NULL, 'a' },
     { "segments-left", required_argument, NULL, 'l' },
     { "segments-right", required_argument, NULL, 'r' },
+    { "network-mode", required_argument, NULL, 'n' },
+    { "network-interface", required_argument, NULL, 'N' },
     { 0, 0, 0, 0 } // used to handle unknown long options
   };
 
   int c;
   // while c != -1
-  while( (c = getopt_long( argc, argv, "hi:cpqvl:r:g:m:a:t:", long_options, NULL) ) != -1 )
+  while( (c = getopt_long( argc, argv, "hi:cpqvl:r:g:m:a:t:n:N:", long_options, NULL) ) != -1 )
   {
     switch( c )
     {
@@ -271,6 +282,17 @@ int main( int argc, char** argv )
           }
         averages_count = atoi( optarg );
         break;
+      case 'n': // --network-mode, -n
+        if( atoi( optarg ) < 0 || atoi( optarg ) > 4 )
+          {
+            std::cerr << "Valid network-mode arguments are: 0 (off), 1 (both), 2 (download), 3 (upload), 4 (dynamic)\n";
+            return EXIT_FAILURE;
+          }
+        net_mode = static_cast< NETWORK_MODE >( atoi( optarg ) );
+        break;
+      case 'N': // --network-interface, -N
+        net_interfaces.push_back( optarg );
+        break;
       case '?':
         // getopt_long prints error message automatically
         return EXIT_FAILURE;
@@ -291,12 +313,75 @@ int main( int argc, char** argv )
 
   MemoryStatus memory_status;
   mem_status( memory_status );
-  std::cout << mem_string( memory_status, mem_mode, use_colors, use_powerline_left, use_powerline_right, segments_to_left, left_color )
-    << cpu_string( cpu_mode, cpu_usage_delay, graph_lines, use_colors, use_powerline_left, use_powerline_right, use_vert_graph )
-    << load_string( use_colors, use_powerline_left, use_powerline_right, averages_count, segments_to_right, right_color );
+
+  std::future< std::string > cpu_future = std::async(
+    std::launch::async,
+    [=]()
+    {
+      return cpu_string( cpu_mode, cpu_usage_delay, graph_lines, use_colors,
+        use_powerline_left, use_powerline_right, use_vert_graph );
+    } );
+
+  NetworkOptions network_options;
+  network_options.mode = net_mode;
+  network_options.interface_names = net_interfaces;
+  network_options.sample_delay_us = cpu_usage_delay;
+
+  NetworkStatus network_status = make_hidden_network_status();
+  bool network_enabled = ( net_mode != NETWORK_MODE_OFF );
+  std::future< NetworkStatus > network_future;
+
+  if( network_enabled )
+  {
+    network_future = std::async(
+      std::launch::async,
+      [network_options]()
+      {
+        return sample_network_status( network_options );
+      } );
+  }
+
+  if( network_enabled )
+  {
+    network_status = network_future.get();
+  }
+
+  std::string cpu_segment = cpu_future.get();
+  bool mem_has_segments_left =
+    ( network_status.state != NETWORK_STATE_HIDDEN );
+
+  short net_bg_color = 0;
+  if( network_status.state != NETWORK_STATE_HIDDEN && use_colors )
+  {
+    unsigned int idx = get_net_color_idx( network_status );
+    if( idx < 7 ) net_bg_color = 22;
+    else if( idx < 15 ) net_bg_color = 28;
+    else if( idx < 22 ) net_bg_color = 34;
+    else if( idx < 34 ) net_bg_color = 40;
+    else if( idx < 41 ) net_bg_color = 76;
+    else if( idx < 47 ) net_bg_color = 82;
+    else if( idx < 53 ) net_bg_color = 118;
+    else if( idx < 59 ) net_bg_color = 154;
+    else if( idx < 66 ) net_bg_color = 190;
+    else if( idx < 72 ) net_bg_color = 226;
+    else if( idx < 78 ) net_bg_color = 220;
+    else if( idx < 84 ) net_bg_color = 214;
+    else if( idx < 90 ) net_bg_color = 208;
+    else if( idx < 96 ) net_bg_color = 202;
+    else net_bg_color = 196;
+  }
+
+  std::cout << net_string( network_status, net_mode, use_colors,
+                          use_powerline_left, use_powerline_right,
+                          false, 0 )
+    << mem_string( memory_status, mem_mode, use_colors, use_powerline_left,
+                   use_powerline_right,
+                   mem_has_segments_left, net_bg_color )
+    << cpu_segment
+    << load_string( use_colors, use_powerline_left, use_powerline_right,
+                   averages_count, segments_to_right, right_color );
 
   std::cout << std::endl;
 
   return EXIT_SUCCESS;
 }
-

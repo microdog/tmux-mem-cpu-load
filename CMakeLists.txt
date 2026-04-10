@@ -46,44 +46,88 @@ endif(NOT CMAKE_BUILD_TYPE)
 # detect system type
 if(CMAKE_SYSTEM_NAME MATCHES "Linux")
   message(STATUS "Linux detected")
-  set(METER_SOURCES "linux/memory.cc" "linux/cpu.cc" "common/load.cc")
+  set(METER_SOURCES "linux/memory.cc" "linux/cpu.cc" "linux/network.cc" "common/load.cc")
 elseif(CMAKE_SYSTEM_NAME MATCHES "Darwin")
   message(STATUS "Darwin detected")
-  set(METER_SOURCES "osx/memory.cc" "osx/cpu.cc" "common/load.cc")
+  set(METER_SOURCES "osx/memory.cc" "osx/cpu.cc" "osx/network.cc" "common/load.cc")
 elseif(CMAKE_SYSTEM_NAME MATCHES "FreeBSD")
   message(STATUS "FreeBSD detected")
-  set(METER_SOURCES "freebsd/memory.cc" "freebsd/cpu.cc" "common/load.cc")
+  set(METER_SOURCES "freebsd/memory.cc" "freebsd/cpu.cc" "freebsd/network.cc" "common/load.cc")
 elseif(CMAKE_SYSTEM_NAME MATCHES "OpenBSD")
   message(STATUS "OpenBSD detected")
-  set(METER_SOURCES "openbsd/memory.cc" "openbsd/cpu.cc" "common/load.cc")
+  set(METER_SOURCES "openbsd/memory.cc" "openbsd/cpu.cc" "openbsd/network.cc" "common/load.cc")
   if(CMAKE_SYSTEM_VERSION VERSION_LESS 5.7)
     add_definitions(-DOPENBSD_WORKAROUND=1)
   endif()
 elseif(CMAKE_SYSTEM_NAME MATCHES "NetBSD")
   message(STATUS "NetBSD detected")
-  set(METER_SOURCES "netbsd/memory.cc" "netbsd/cpu.cc" "common/load.cc")
+  set(METER_SOURCES "netbsd/memory.cc" "netbsd/cpu.cc" "netbsd/network.cc" "common/load.cc")
 elseif(CMAKE_SYSTEM_NAME MATCHES "Windows")
   message(STATUS "Windows detected")
-  set(METER_SOURCES "windows/memory.cc" "windows/cpu.cc" "windows/load.cc")
+  set(METER_SOURCES "windows/memory.cc" "windows/cpu.cc" "windows/network.cc" "windows/load.cc")
 else()
   message(FATAL_ERROR "${CMAKE_SYSTEM_NAME} Cannot be compiled on this system")
   message(FATAL_ERROR "Cannot be compiled on this system")
 endif()
 
 # set common source files
-set(COMMON_SOURCES "common/main.cc" "common/memory.cc" "common/graph.cc" "common/powerline.cc")
+set(COMMON_SOURCES
+  "common/main.cc"
+  "common/memory.cc"
+  "common/graph.cc"
+  "common/powerline.cc"
+  "common/network_sampler.cc"
+  "common/network.cc")
+
+find_package(Threads REQUIRED)
 
 add_executable(tmux-mem-cpu-load ${COMMON_SOURCES} ${METER_SOURCES})
 # add binary tree so we find version.h
 target_include_directories(tmux-mem-cpu-load PUBLIC "${PROJECT_BINARY_DIR}")
 target_include_directories(tmux-mem-cpu-load PUBLIC "${PROJECT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/common")
+target_link_libraries(tmux-mem-cpu-load ${CMAKE_THREAD_LIBS_INIT})
+if(CMAKE_SYSTEM_NAME MATCHES "Linux|Darwin|FreeBSD|OpenBSD|NetBSD|Windows")
+  target_compile_definitions(tmux-mem-cpu-load
+    PRIVATE TMUX_MEM_CPU_LOAD_HAVE_NETWORK_READER=1)
+endif()
 if(CMAKE_SYSTEM_NAME MATCHES "Windows")
-  target_link_libraries(tmux-mem-cpu-load Pdh)
+  target_link_libraries(tmux-mem-cpu-load Pdh Iphlpapi)
 endif()
 install(TARGETS tmux-mem-cpu-load RUNTIME DESTINATION bin)
 
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(network_logic_test
+    tests/network_logic_test.cc
+    tests/network_reader_stub.cc
+    common/network_sampler.cc
+    common/network.cc
+    common/powerline.cc)
+  target_include_directories(network_logic_test PUBLIC
+    "${PROJECT_BINARY_DIR}"
+    "${PROJECT_SOURCE_DIR}"
+    "${PROJECT_SOURCE_DIR}/common")
+  target_compile_definitions(network_logic_test
+    PRIVATE TMUX_MEM_CPU_LOAD_HAVE_NETWORK_READER=1)
+  target_link_libraries(network_logic_test ${CMAKE_THREAD_LIBS_INIT})
+  add_test(NAME network_logic_test COMMAND network_logic_test)
+
+  if(CMAKE_SYSTEM_NAME MATCHES "Linux")
+    add_executable(linux_network_reader_test
+      tests/linux_network_reader_test.cc
+      common/network_sampler.cc
+      linux/network.cc)
+    target_include_directories(linux_network_reader_test PUBLIC
+      "${PROJECT_BINARY_DIR}"
+      "${PROJECT_SOURCE_DIR}"
+      "${PROJECT_SOURCE_DIR}/common"
+      "${PROJECT_SOURCE_DIR}/linux")
+    target_compile_definitions(linux_network_reader_test
+      PRIVATE TMUX_MEM_CPU_LOAD_HAVE_NETWORK_READER=1)
+    target_link_libraries(linux_network_reader_test ${CMAKE_THREAD_LIBS_INIT})
+    add_test(NAME linux_network_reader_test COMMAND linux_network_reader_test)
+  endif()
+
   add_test(NAME usage
     COMMAND tmux-mem-cpu-load -h
     )
@@ -114,6 +158,18 @@ if(BUILD_TESTING)
 
   add_test(NAME powerline-left
     COMMAND tmux-mem-cpu-load --powerline-left
+    )
+
+  add_test(NAME network_mode_download
+    COMMAND tmux-mem-cpu-load --network-mode 2 --interval 1
+    )
+
+  add_test(NAME network_multiple_interfaces
+    COMMAND tmux-mem-cpu-load --network-mode 1 --network-interface lo,eth0 --network-interface wlan0 --interval 1
+    )
+
+  add_test(NAME invalid_network_mode
+    COMMAND tmux-mem-cpu-load --network-mode 9
     )
 
   add_test(NAME invalid_status_interval
@@ -172,5 +228,6 @@ if(BUILD_TESTING)
     invalid_status_interval
     invalid_graph_lines
     old_option_specification
+    invalid_network_mode
     PROPERTIES WILL_FAIL TRUE)
 endif()
